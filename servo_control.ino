@@ -22,9 +22,18 @@ class MotorMotion
       _pos = 1500;
       _servo.writeMicroseconds(_pos);
     }
+
+    int getPos(void)
+    {
+      return _pos;
+    }
     
     void MotionTo(int target)
     {
+      // Se temos que ir onde estamos, pronto!
+      if(target == _pos)
+        return;
+        
       _bActive = true;
       _target = target;
       if(_target > _pos)
@@ -66,26 +75,119 @@ class MotorMotion
     }
 };
 
+class ServoControl2d
+{
+private:
+  MotorMotion _servos[2];
+  int _nDelay;
+  
+public:
+  ServoControl2d()
+  {
+    _nDelay = 10;
+  }
 
-#define SERVOS 2
-MotorMotion srv[SERVOS];
+  void Attach(int nPin1, int nPin2)
+  {
+    _servos[0].Attach(nPin1);
+    _servos[1].Attach(nPin2);
+  }
+
+  void setDelay(int nDelay)
+  {
+    _nDelay = nDelay;
+  }
+  
+  void tick(void)
+  {
+    _servos[0].tick();
+    _servos[1].tick();
+  }
+
+  void MotionTo(int nTarget1, int nTarget2)
+  {
+    // Comandamos os servos:
+    _servos[0].MotionTo(nTarget1);
+    _servos[1].MotionTo(nTarget2);
+
+    // Calculamos os delays:
+    unsigned long delta1 = abs(nTarget1 - _servos[0].getPos());
+    unsigned long delta2 = abs(nTarget2 - _servos[1].getPos());
+    /*
+      O delay total do maior caminho à ser percorrido deverá ser o mesmo delay do mais curto.
+      delta1 * delay = delta2 * delay2
+      
+                delta1 * delay 
+      delay2 = ----------------
+                    delta2
+    */
+    Serial.print("Going from (");
+    Serial.print(_servos[0].getPos());
+    Serial.print(", ");
+    Serial.print(_servos[1].getPos());
+    Serial.print(") to (");
+    Serial.print(nTarget1);
+    Serial.print(", ");
+    Serial.print(nTarget2);
+    Serial.print("). Deltas: (");
+    Serial.print(delta1);
+    Serial.print(", ");
+    Serial.print(delta2);
+    Serial.print("). Delays: (");
+
+    if(delta1 >= delta2)
+    {
+      unsigned long nGDelay = _nDelay;
+      if(delta2 > 0)
+        nGDelay = (delta1 * _nDelay)/ delta2;
+        
+      _servos[0].setDelay(_nDelay);
+      _servos[1].setDelay(nGDelay);
+      Serial.print(_nDelay);
+      Serial.print(", ");
+      Serial.print(nGDelay);
+    }
+    else
+    {
+      unsigned long nGDelay = _nDelay;
+      if(delta1 > 0)
+        nGDelay = (delta2 * _nDelay)/ delta1;
+        
+      _servos[0].setDelay(nGDelay);
+      _servos[1].setDelay(_nDelay);
+      Serial.print(nGDelay);
+      Serial.print(", ");
+      Serial.print(_nDelay);
+    }
+
+    Serial.println(").");
+  }
+
+  void gotoDirect(int n1, int n2)
+  {
+    _servos[0].gotoDirect(n1);
+    _servos[1].gotoDirect(n2);
+  }
+};
+
+ServoControl2d servos;
 
 void setup()
 {
-  srv[0].Attach(9);
-  srv[1].Attach(10);
+  servos.Attach(9,10);
   Serial.begin(9600);
 }
 
 enum
 {
   mWaitCommand,
-  mCollectNumber
+  mCollectNumber,
+  mCollectNumber1,
+  mCollectNumber2
 };
 
 enum
 {
-  cmdServoSelect, // s
   cmdGotoDegrees, // g
   cmdSetDelay,    // D
   cmdGotoDirect,  // d
@@ -94,27 +196,27 @@ enum
 
 int mode = mWaitCommand;
 int cmd = cmdNone;
-String sBuffer("");
-int servo = 0;
+String sBuffer1("");
+String sBuffer2("");
 
 void TreatCommand(char ch)
 {
   switch(ch)
   {
-    case 's': // Servo Select
     case 'g': // Goto degrees
-    case 'D': // Set Delay
     case 'd': // Goto Direct
-      sBuffer = "";
+      sBuffer1 = "";
+      sBuffer2 = "";
+      mode = mCollectNumber1;
+      break;
+    case 'D': // Set Delay
+      sBuffer1 = "";
       mode = mCollectNumber;
       break;
   }
 
   switch(ch)
   {
-    case 's':
-      cmd = cmdServoSelect;
-      break;
     case 'g':
       cmd = cmdGotoDegrees;
       break;
@@ -129,23 +231,18 @@ void TreatCommand(char ch)
 
 void ApplyCommand(void)
 {
-  int number = sBuffer.toInt();
+  int number1 = sBuffer1.toInt();
+  int number2 = sBuffer2.toInt();
   switch(cmd)
   {
-    case cmdServoSelect:
-      if(number < SERVOS)
-      {
-        servo = number;
-      }
-      break;
     case cmdGotoDegrees:
-      srv[servo].MotionTo(number);
+      servos.MotionTo(number1, number2);
       break;
     case cmdSetDelay:
-      srv[servo].setDelay(number);
+      servos.setDelay(number1);
       break;
     case cmdGotoDirect:
-      srv[servo].gotoDirect(number);
+      servos.gotoDirect(number1, number2);
       break;
   }
 }
@@ -155,18 +252,35 @@ void TreatCollectNumber(char ch)
   // Se for um digito, apendamos no buffer
   if(isdigit(ch))
   {
-    sBuffer += (ch - '0');
+    switch(mode)
+    {
+      case mCollectNumber:
+      case mCollectNumber1:
+        sBuffer1 += (ch - '0');
+        break;
+      case mCollectNumber2:
+        sBuffer2 += (ch - '0');
+        break;
+    }
   }
   else
   {
-    // Não é digito, então acabou o número
-    if(sBuffer.length() > 0)
+    if(mode == mCollectNumber1)
     {
-      // Existe conteúdo no buffer, então aplicamos o comando
-      ApplyCommand();
+      // Vamos ao próximo:
+      mode = mCollectNumber2;
     }
-    // De qualquer maneira, passamos à esperar um comando novamente.
-    mode = mWaitCommand;
+    else
+    {
+      // Chegando aqui acabaram os dois:
+      if( sBuffer1.length() > 0 && (mode == mCollectNumber || sBuffer2.length() > 0) )
+      {
+        // Existe conteúdo nos buffers, então aplicamos o comando
+        ApplyCommand();
+      }
+      // De qualquer maneira, passamos à esperar um comando novamente.
+      mode = mWaitCommand;
+    }
   }
 }
 
@@ -181,13 +295,12 @@ void loop()
         TreatCommand(ch);
         break;
       case mCollectNumber:
+      case mCollectNumber1:
+      case mCollectNumber2:
         TreatCollectNumber(ch);
         break;
     }
   }
-  for(int i = 0; i < SERVOS; i++)
-  {
-    srv[i].tick();
-  }
+  servos.tick();
 }
 
