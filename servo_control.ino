@@ -1,5 +1,7 @@
 #include <Servo.h>
 
+//#define VERBOSE 1
+
 class MotorMotion
 {
   private:
@@ -43,6 +45,11 @@ class MotorMotion
       _pass = _delay;
     }
 
+    void MoveRelative(int delta)
+    {
+      MotionTo(_pos + delta);
+    }
+
     void setDelay(int nDelay)
     {
       _delay = nDelay;
@@ -51,6 +58,11 @@ class MotorMotion
     void gotoDirect(int us)
     {
       _servo.writeMicroseconds(us);
+    }
+
+    void Stop(void)
+    {
+      _bActive = false;
     }
 
     void tick(void)
@@ -121,6 +133,8 @@ public:
       delay2 = ----------------
                     delta2
     */
+    
+#ifdef VERBOSE
     Serial.print("Going from (");
     Serial.print(_servos[0].getPos());
     Serial.print(", ");
@@ -134,6 +148,7 @@ public:
     Serial.print(", ");
     Serial.print(delta2);
     Serial.print("). Delays: (");
+#endif
 
     if(delta1 >= delta2)
     {
@@ -143,9 +158,11 @@ public:
         
       _servos[0].setDelay(_nDelay);
       _servos[1].setDelay(nGDelay);
+#ifdef VERBOSE
       Serial.print(_nDelay);
       Serial.print(", ");
       Serial.print(nGDelay);
+#endif
     }
     else
     {
@@ -155,18 +172,34 @@ public:
         
       _servos[0].setDelay(nGDelay);
       _servos[1].setDelay(_nDelay);
+#ifdef VERBOSE
       Serial.print(nGDelay);
       Serial.print(", ");
       Serial.print(_nDelay);
+#endif
     }
 
+#ifdef VERBOSE
     Serial.println(").");
+#endif
+  }
+
+  void MotionRelative(int delta1, int delta2)
+  {
+    MotionTo(_servos[0].getPos() + delta1,
+             _servos[1].getPos() + delta2 );
   }
 
   void gotoDirect(int n1, int n2)
   {
     _servos[0].gotoDirect(n1);
     _servos[1].gotoDirect(n2);
+  }
+
+  void Stop(void)
+  {
+    _servos[0].Stop();
+    _servos[1].Stop();
   }
 };
 
@@ -191,6 +224,8 @@ enum
   cmdGotoDegrees, // g
   cmdSetDelay,    // D
   cmdGotoDirect,  // d
+  cmdGotoRelative,// r
+  cmdStop,        // s
   cmdNone
 };
 
@@ -205,6 +240,7 @@ void TreatCommand(char ch)
   {
     case 'g': // Goto degrees
     case 'd': // Goto Direct
+    case 'r': // Goto Relative
       sBuffer1 = "";
       sBuffer2 = "";
       mode = mCollectNumber1;
@@ -226,6 +262,13 @@ void TreatCommand(char ch)
     case 'd':
       cmd = cmdGotoDirect;
       break;
+    case 'r':
+      cmd = cmdGotoRelative;
+      break;
+    case 's':
+      cmd = cmdStop;
+      ApplyCommand();
+      break;
   }
 }
 
@@ -233,6 +276,19 @@ void ApplyCommand(void)
 {
   int number1 = sBuffer1.toInt();
   int number2 = sBuffer2.toInt();
+  
+#ifdef VERBOSE
+  Serial.print("Text: (");
+  Serial.print(sBuffer1);
+  Serial.print(",");
+  Serial.print(sBuffer2);
+  Serial.print(") - Int: (");
+  Serial.print(number1);
+  Serial.print(",");
+  Serial.print(number2);
+  Serial.println(").");
+#endif
+
   switch(cmd)
   {
     case cmdGotoDegrees:
@@ -244,22 +300,34 @@ void ApplyCommand(void)
     case cmdGotoDirect:
       servos.gotoDirect(number1, number2);
       break;
+    case cmdGotoRelative:
+      servos.MotionRelative(number1, number2);
+      break;
+    case cmdStop:
+      servos.Stop();
+      break;
   }
 }
 
 void TreatCollectNumber(char ch)
 {
   // Se for um digito, apendamos no buffer
-  if(isdigit(ch))
+  if(isdigit(ch) || ch == '-')
   {
     switch(mode)
     {
       case mCollectNumber:
       case mCollectNumber1:
-        sBuffer1 += (ch - '0');
+        if(isdigit(ch))
+          sBuffer1 += (ch - '0');
+        else
+          sBuffer1 += "-";
         break;
       case mCollectNumber2:
-        sBuffer2 += (ch - '0');
+        if(isdigit(ch))
+          sBuffer2 += (ch - '0');
+        else
+          sBuffer2 += "-";
         break;
     }
   }
